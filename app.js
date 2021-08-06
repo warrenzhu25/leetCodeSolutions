@@ -9,23 +9,17 @@ const limit = pLimit(3);
 const writeFile = promisify(fs.writeFile);
 const mkDir = promisify(fs.mkdir);
 
-const problemUrl = process.argv[2];
-if (!problemUrl || !isValidURL(problemUrl)) {
-    throw new Error("Invaid url");
-}
-
-const url = `${problemUrl}/discuss/?currentPage=1&orderBy=most_votes`;
-
-const { origin } = new URL(url);
-
-if (origin !== "https://leetcode.com") {
-    throw new Error(`${url} is not a leetcode url`);
-}
-
 class LeetCodeScrapper {
     constructor(browser) {
         this.browser = browser;
-        this.url = url;
+    }
+
+    async downloadAll() {
+        let problems = JSON.parse(fs.readFileSync("leetcode.json"));
+        problems.stat_status_pairs.sort((a, b) => (a.stat.question_id > b.stat.question_id) ? 1: -1);
+        problems.stat_status_pairs.slice(0, 5).forEach(p => {
+            this.getSolutionLinks(p);
+        })
     }
 
     async getNewPage() {
@@ -37,9 +31,14 @@ class LeetCodeScrapper {
         return page;
     }
 
-    async getSolutionLinks() {
+    async getSolutionLinks(problem) {
+        const title_slug = problem.stat.question__title_slug;
+
         const page = await this.getNewPage();
-        await page.goto(this.url, { waitUntil: "domcontentloaded" });
+
+        const url = `https://leetcode.com/problems/${problem.stat.question__title_slug}/discuss/?currentPage=1&orderBy=most_votes`
+        console.log(url)
+        await page.goto(url, { waitUntil: "domcontentloaded" });
         await page.waitForSelector(".topic-item-wrap__2FSZ");
 
         const title = await page.$eval(
@@ -56,10 +55,19 @@ class LeetCodeScrapper {
             })
         );
 
+        const problemDesc = await this.getProblem(`https://leetcode.com/problems/${problem.stat.question__title_slug}`)
+
         const solutionData = await Promise.all(input);
 
-        await this.closeBrowser();
-        return { [title]: solutionData };
+        const fileName = `${problem.stat.frontend_question_id}.${title_slug}.txt`;
+        console.log(fileName);
+
+        writeFile(fileName, `${title}\r\n\r\n${problemDesc}\r\n\r\n`,  {'flag':'a'})
+        return Promise.all(
+            solutionData.map(({ title, solution }) =>
+                writeFile(fileName, `${title}\r\n\r\n${solution}\r\n\r\n`,  {'flag':'a'})
+            )
+        );
     }
 
     async getSolutionDetails(el) {
@@ -90,39 +98,36 @@ class LeetCodeScrapper {
         return markdown;
     }
 
+    async getProblem(link) {
+        const page = await this.getNewPage();
+        await page.goto(link);
+
+        await page.waitForSelector(".content__u3I1.question-content__JfgR"); 
+
+        const problem = await page.$eval(
+            ".content__u3I1.question-content__JfgR",
+            el => el.textContent
+        );
+
+        console.log(problem);
+        await page.close();
+        return problem;
+    }
+
     async closeBrowser() {
         return this.browser.close();
     }
 
-    static async getLeetCodeInstance(url) {
+    static async getLeetCodeInstance() {
         const browser = await puppeteer.launch({ headless: true });
-        return new LeetCodeScrapper(browser, url);
+        return new LeetCodeScrapper(browser);
     }
 }
 
-LeetCodeScrapper.getLeetCodeInstance(url)
-    .then(leetCode => {
-        return leetCode.getSolutionLinks();
-    })
-    .then(saveToFile)
-    .catch(console.error);
+LeetCodeScrapper.getLeetCodeInstance()
+.then(l => {
+    return l.downloadAll();
+})
+.catch(console.error);
 
-async function saveToFile(solutions) {
-    const [title, answers] = Object.entries(solutions).pop();
-    const questionTitle = slugify(title);
-    writeFile(`${questionTitle}.txt`, `${title}\r\n\r\n`,  {'flag':'a'})
-    return Promise.all(
-        answers.map(({ title, solution }) =>
-            writeFile(`${questionTitle}.txt`, `${title}\r\n\r\n${solution}\r\n\r\n`,  {'flag':'a'})
-        )
-    );
-}
 
-function isValidURL(url) {
-    try {
-        new URL(url);
-        return true;
-    } catch (err) {
-        return false;
-    }
-}
