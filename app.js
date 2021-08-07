@@ -5,7 +5,8 @@ const fs = require("fs");
 const { promisify } = require("util");
 const { URL } = require("url");
 
-const limit = pLimit(3);
+const limit = pLimit(5);
+const pageLimit = pLimit(20)
 const writeFile = promisify(fs.writeFile);
 const mkDir = promisify(fs.mkdir);
 
@@ -16,10 +17,16 @@ class LeetCodeScrapper {
 
     async downloadAll() {
         let problems = JSON.parse(fs.readFileSync("leetcode.json"));
-        problems.stat_status_pairs.sort((a, b) => (a.stat.question_id > b.stat.question_id) ? 1: -1);
-        problems.stat_status_pairs.slice(0, 5).forEach(p => {
-            this.getSolutionLinks(p);
-        })
+        const stats = problems.stat_status_pairs.filter(x => !x.paid_only )
+        stats.sort((a, b) => (a.stat.question_id > b.stat.question_id) ? 1: -1);
+        const result = stats.slice(175, 1000).map(p => 
+            limit(async () => {
+                return await this.getSolutionLinks(p);
+            }));
+
+        await Promise.all(result);
+        await this.closeBrowser();
+        console.log("done");
     }
 
     async getNewPage() {
@@ -35,11 +42,15 @@ class LeetCodeScrapper {
         const title_slug = problem.stat.question__title_slug;
 
         const page = await this.getNewPage();
+        await page.setDefaultNavigationTimeout(0);
+        await page.setDefaultTimeout(60000);
 
         const url = `https://leetcode.com/problems/${problem.stat.question__title_slug}/discuss/?currentPage=1&orderBy=most_votes`
         console.log(url)
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await page.waitForSelector(".topic-item-wrap__2FSZ");
+
+        const problemDesc = await this.getProblem(`https://leetcode.com/problems/${problem.stat.question__title_slug}`)
 
         const title = await page.$eval(
             ".title__27Kb",
@@ -49,15 +60,15 @@ class LeetCodeScrapper {
         const elements = await page.$$(".topic-item-wrap__2FSZ");
 
         const input = elements.slice(0, 5).map(el =>
-            limit(async () => {
+            pageLimit(async () => {
                 const solution = await this.getSolutionDetails(el);
                 return solution;
             })
         );
 
-        const problemDesc = await this.getProblem(`https://leetcode.com/problems/${problem.stat.question__title_slug}`)
-
         const solutionData = await Promise.all(input);
+
+        await page.close();
 
         const fileName = `${problem.stat.frontend_question_id}.${title_slug}.txt`;
         console.log(fileName);
@@ -85,7 +96,10 @@ class LeetCodeScrapper {
     }
 
     async getSolution(link) {
+        console.log(`Downloading ${link}`)
         const page = await this.getNewPage();
+        await page.setDefaultNavigationTimeout(0);
+        await page.setDefaultTimeout(60000);
         await page.goto(link);
 
         await page.waitForSelector(".discuss-markdown-container");
@@ -94,12 +108,17 @@ class LeetCodeScrapper {
             ".discuss-markdown-container",
             el => el.textContent
         );
+
+        console.log(`Downloaded ${link}`)
         await page.close();
         return markdown;
     }
 
     async getProblem(link) {
+        console.log(`Downloading ${link}`);
         const page = await this.getNewPage();
+        await page.setDefaultNavigationTimeout(0);
+        await page.setDefaultTimeout(60000);
         await page.goto(link);
 
         await page.waitForSelector(".content__u3I1.question-content__JfgR"); 
@@ -109,7 +128,8 @@ class LeetCodeScrapper {
             el => el.textContent
         );
 
-        console.log(problem);
+        console.log(`Downloaded ${link}`)
+
         await page.close();
         return problem;
     }
