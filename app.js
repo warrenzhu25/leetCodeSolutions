@@ -29,6 +29,51 @@ class LeetCodeScrapper {
         console.log("done");
     }
 
+    async mergeByTag() {
+        const tags = ["binary-search", "dynamic-programming", "depth-first-search", "breadth-first-search", "two-pointers", "backtracking","prefix-sum", "sorting", "sliding-window", "binary-tree"]
+        let problems = JSON.parse(fs.readFileSync("leetcode.json"));
+        const stats = problems.stat_status_pairs.filter(x => !x.paid_only )
+        const problemMap = new Map(stats.map(s => [s.stat.question__title_slug, s.stat.frontend_question_id]))
+        const result = tags.map(p => 
+            limit(async () => {
+                return await this.merge(p, problemMap);
+            }));
+
+        await Promise.all(result);
+        await this.closeBrowser();
+        console.log("done");
+    }
+
+    async merge(tag, problemMap) {
+        const url = `https://leetcode.com/tag/${tag}/`;
+        console.log(url);
+        const page = await this.getNewPage();
+        await page.setDefaultTimeout(60000);
+
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await page.waitForSelector(".title-cell__ZGos > a");
+
+        const problems = await page.$$eval(
+            ".title-cell__ZGos > a",
+            els => els.map(el => `${el.getAttribute("href")}`.split("/").pop())
+        );
+
+        console.log(problems);
+
+        const target = `tags/${tag}.txt`;
+
+        problems.forEach(p => {
+            const fileName = `${problemMap.get(p)}.${p}.txt`;
+            console.log(fileName);
+            if (fs.existsSync(fileName)) {
+                fs.writeFileSync(target, fs.readFileSync(fileName), {'flag':'a+'});
+            }
+            
+        })
+
+        await page.close();
+    }
+
     async getNewPage() {
         const page = await this.browser.newPage();
         await page.setCacheEnabled(false);
@@ -144,9 +189,15 @@ class LeetCodeScrapper {
     }
 }
 
+// LeetCodeScrapper.getLeetCodeInstance()
+// .then(l => {
+//     return l.downloadAll();
+// })
+// .catch(console.error);
+
 LeetCodeScrapper.getLeetCodeInstance()
 .then(l => {
-    return l.downloadAll();
+    return l.mergeByTag();
 })
 .catch(console.error);
 
